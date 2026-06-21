@@ -67,9 +67,14 @@ on:
         required: false
         default: 'access_token'
 
-      # ── URL objetivo ────────────────────────────────────────────────────────
+      # ── OpenAPI / scan ─────────────────────────────────────────────────────
+      openapi_path:
+        description: 'Path del spec OpenAPI en el servidor (default: /openapi.json)'
+        type: string
+        required: false
+        default: '/openapi.json'
       target:
-        description: 'URL objetivo del scan. Vacío = http://localhost:<port>'
+        description: 'URL del spec OpenAPI. Vacío = http://localhost:<port><openapi_path>'
         type: string
         required: false
         default: ''
@@ -88,7 +93,7 @@ on:
         required: false
 
 jobs:
-  zap-full-scan:
+  zap-api-scan:
     runs-on: ubuntu-latest
 
     # ── Base de datos efímera para CI ───────────────────────────────────────
@@ -239,19 +244,18 @@ jobs:
           echo "ZAP_AUTH_HEADER=Authorization" >> "$GITHUB_ENV"
           echo "ZAP_AUTH_HEADER_VALUE=Bearer ${AUTH_TOKEN}" >> "$GITHUB_ENV"
 
-      # ── 8. OWASP ZAP Full Scan activo ───────────────────────────────────────
-      # fail_action: false → ZAP no falla por findings de seguridad.
-      # continue-on-error: true → ZAP no falla el job por errores internos
-      #   (ej: API v1 de artifacts rechaza el nombre "zap_scan").
-      # La decisión de fallar el job la toma exclusivamente el step siguiente.
-      # NO pasar -r/-w/-J en cmd_options: el proceso zap dentro del Docker (user 'zap')
-      # no tiene permiso para escribir en /zap/wrk/ con nombres custom. El action
-      # wrapper escribe los reportes por defecto con los permisos correctos.
-      - name: OWASP ZAP Active Full Scan
-        uses: zaproxy/action-full-scan@v0.10.0
+      # ── 8. OWASP ZAP API Scan ───────────────────────────────────────────────
+      # action-api-scan importa el spec OpenAPI y escanea TODOS los endpoints
+      # definidos en él (a diferencia de full-scan que solo sigue links HTML).
+      # target = URL del spec OpenAPI; ZAP deriva la base URL del campo servers.
+      # fail_action: false + continue-on-error: true → la decisión de fallar el
+      # job queda exclusivamente en el step "Fail on High alerts".
+      - name: OWASP ZAP API Scan
+        uses: zaproxy/action-api-scan@v0.9.0
         continue-on-error: true
         with:
-          target: ${{ inputs.target != '' && inputs.target || format('http://localhost:{0}', inputs.port) }}
+          target: ${{ inputs.target != '' && inputs.target || format('http://localhost:{0}{1}', inputs.port, inputs.openapi_path) }}
+          format: openapi
           fail_action: false
           allow_issue_writing: false
 
@@ -280,7 +284,7 @@ jobs:
       # ── 10. Subir reportes como artifact ────────────────────────────────────
       # if: always() garantiza que los reportes se suban incluso si el step
       # anterior falló por alertas High.
-      # Nombres por defecto generados por zaproxy/action-full-scan@v0.10.0.
+      # Nombres por defecto generados por zaproxy/action-api-scan@v0.9.0.
       - name: Upload ZAP scan reports
         uses: actions/upload-artifact@v4
         if: always()
