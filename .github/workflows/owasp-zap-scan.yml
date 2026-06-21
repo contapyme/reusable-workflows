@@ -240,13 +240,16 @@ jobs:
           echo "ZAP_AUTH_HEADER_VALUE=Bearer ${AUTH_TOKEN}" >> "$GITHUB_ENV"
 
       # ── 8. OWASP ZAP Full Scan activo ───────────────────────────────────────
-      # fail_action: false → el step nunca falla por sí solo; la decisión de
-      # fallar la toma el step siguiente según la severidad real de las alertas.
+      # fail_action: false → ZAP no falla por findings de seguridad.
+      # continue-on-error: true → ZAP no falla el job por errores internos
+      #   (ej: API v1 de artifacts rechaza el nombre "zap_scan").
+      # La decisión de fallar el job la toma exclusivamente el step siguiente.
       # NO pasar -r/-w/-J en cmd_options: el proceso zap dentro del Docker (user 'zap')
       # no tiene permiso para escribir en /zap/wrk/ con nombres custom. El action
       # wrapper escribe los reportes por defecto con los permisos correctos.
       - name: OWASP ZAP Active Full Scan
         uses: zaproxy/action-full-scan@v0.10.0
+        continue-on-error: true
         with:
           target: ${{ inputs.target != '' && inputs.target || format('http://localhost:{0}', inputs.port) }}
           fail_action: false
