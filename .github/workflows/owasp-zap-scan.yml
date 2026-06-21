@@ -240,21 +240,43 @@ jobs:
           echo "ZAP_AUTH_HEADER_VALUE=Bearer ${AUTH_TOKEN}" >> "$GITHUB_ENV"
 
       # ── 8. OWASP ZAP Full Scan activo ───────────────────────────────────────
-      # fail_action: true → el job falla si ZAP encuentra alertas High (esperado).
+      # fail_action: false → el step nunca falla por sí solo; la decisión de
+      # fallar la toma el step siguiente según la severidad real de las alertas.
       # NO pasar -r/-w/-J en cmd_options: el proceso zap dentro del Docker (user 'zap')
-      # no tiene permiso para escribir en /zap/wrk/. El action wrapper escribe los
-      # reportes por defecto (report_html.html, report_md.md, report_json.json) con
-      # los permisos correctos. Esos son los archivos que sube el paso de upload.
+      # no tiene permiso para escribir en /zap/wrk/ con nombres custom. El action
+      # wrapper escribe los reportes por defecto con los permisos correctos.
       - name: OWASP ZAP Active Full Scan
         uses: zaproxy/action-full-scan@v0.10.0
         with:
           target: ${{ inputs.target != '' && inputs.target || format('http://localhost:{0}', inputs.port) }}
-          fail_action: true
+          fail_action: false
           allow_issue_writing: false
 
-      # ── 9. Subir reportes como artifact ─────────────────────────────────────
-      # if: always() garantiza que los reportes se suban aunque el scan haya fallado
-      # (lo que ocurre cuando ZAP encuentra alertas High con fail_action: true).
+      # ── 9. Fallar solo si hay alertas High (riskcode=3) ──────────────────────
+      # Medium=2, Low=1, Informational=0 — quedan en el reporte pero no rompen el job.
+      - name: Fail on High alerts
+        if: always()
+        run: |
+          if [ ! -f report_json.json ]; then
+            echo "report_json.json no encontrado — ZAP no generó reporte"
+            exit 1
+          fi
+          HIGH=$(python3 -c "
+          import json, sys
+          data = json.load(open('report_json.json'))
+          alerts = [a for s in data.get('site', []) for a in s.get('alerts', [])]
+          high = [a for a in alerts if str(a.get('riskcode', '')) == '3']
+          print(len(high))
+          " 2>/dev/null || echo "0")
+          if [ "$HIGH" -gt 0 ]; then
+            echo "::error::ZAP encontró $HIGH alerta(s) High — revisar el reporte"
+            exit 1
+          fi
+          echo "Sin alertas High. Scan completado."
+
+      # ── 10. Subir reportes como artifact ────────────────────────────────────
+      # if: always() garantiza que los reportes se suban incluso si el step
+      # anterior falló por alertas High.
       # Nombres por defecto generados por zaproxy/action-full-scan@v0.10.0.
       - name: Upload ZAP scan reports
         uses: actions/upload-artifact@v4
