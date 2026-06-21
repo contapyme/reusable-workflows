@@ -127,11 +127,20 @@ jobs:
           ref: ${{ inputs.ref }}
           token: ${{ secrets.CHECKOUT_TOKEN }}
 
-      # ── 2. Instalar dependencias ─────────────────────────────────────────────
+      # ── 2. Python + caché de pip ────────────────────────────────────────────
+      # Cachea ~/.cache/pip usando pyproject.toml/requirements*.txt como key.
+      # Si las dependencias no cambiaron, el siguiente run las toma del caché.
+      - name: Set up Python with pip cache
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+          cache: 'pip'
+
+      # ── 3. Instalar dependencias ─────────────────────────────────────────────
       - name: Install dependencies
         run: ${{ inputs.install_command }}
 
-      # ── 3. Levantar la app en background ────────────────────────────────────
+      # ── 4. Levantar la app en background ────────────────────────────────────
       # La app arranca con DATABASE_URL del env del job → corre migraciones automáticas.
       # ZAP corre en Docker con --network host en Linux, por lo que localhost
       # del contenedor resuelve al host runner (comportamiento de GitHub Actions).
@@ -140,7 +149,7 @@ jobs:
           ${{ inputs.start_command }} &
           echo "APP_PID=$!" >> $GITHUB_ENV
 
-      # ── 4. Health check — espera a que la app responda ───────────────────────
+      # ── 5. Health check — espera a que la app responda ───────────────────────
       # Reintenta hasta 30 veces cada 3 s (= 90 s máximo).
       # Acepta cualquier HTTP 2xx, 3xx o 4xx: si devuelve algo, la app ya levantó.
       - name: Wait for application to be ready
@@ -160,7 +169,7 @@ jobs:
           kill "$APP_PID" 2>/dev/null || true
           exit 1
 
-      # ── 5. Seed opcional ─────────────────────────────────────────────────────
+      # ── 6. Seed opcional ─────────────────────────────────────────────────────
       # Si el caller provee seed_command, lo corre DESPUÉS de que la app arrancó.
       # Con auth_type=seed: el comando debe imprimir una línea "TOKEN=<jwt>" en stdout;
       # el workflow la captura y la usa como Bearer token para ZAP.
@@ -187,13 +196,13 @@ jobs:
             ${{ inputs.seed_command }}
           fi
 
-      # ── 6a. Auth estática ────────────────────────────────────────────────────
+      # ── 7a. Auth estática ────────────────────────────────────────────────────
       # Copia directamente el secret API_TOKEN a la variable AUTH_TOKEN
       - name: Set static auth token
         if: inputs.auth_type == 'static'
         run: echo "AUTH_TOKEN=${{ secrets.API_TOKEN }}" >> $GITHUB_ENV
 
-      # ── 6b. Auth dinámica ────────────────────────────────────────────────────
+      # ── 7b. Auth dinámica ────────────────────────────────────────────────────
       # 1. Construye el body del login con jq para manejar caracteres especiales
       # 2. Hace POST al endpoint de login
       # 3. Extrae el JWT del campo configurado y lo guarda en AUTH_TOKEN
@@ -233,7 +242,7 @@ jobs:
           echo "AUTH_TOKEN=$TOKEN" >> $GITHUB_ENV
           echo "Token obtenido exitosamente."
 
-      # ── 7. Inyectar token de auth para ZAP ──────────────────────────────────
+      # ── 8. Inyectar token de auth para ZAP ──────────────────────────────────
       # ZAP_AUTH_HEADER / ZAP_AUTH_HEADER_VALUE son leídas por el Docker container
       # (-e ZAP_AUTH_HEADER -e ZAP_AUTH_HEADER_VALUE ya están en el docker run).
       # NO usar -config en cmd_options: getopt parsea -config como -c onfig
@@ -244,7 +253,7 @@ jobs:
           echo "ZAP_AUTH_HEADER=Authorization" >> "$GITHUB_ENV"
           echo "ZAP_AUTH_HEADER_VALUE=Bearer ${AUTH_TOKEN}" >> "$GITHUB_ENV"
 
-      # ── 8. OWASP ZAP API Scan ───────────────────────────────────────────────
+      # ── 9. OWASP ZAP API Scan ───────────────────────────────────────────────
       # action-api-scan importa el spec OpenAPI y escanea TODOS los endpoints
       # definidos en él (a diferencia de full-scan que solo sigue links HTML).
       # target = URL del spec OpenAPI; ZAP deriva la base URL del campo servers.
@@ -259,7 +268,7 @@ jobs:
           fail_action: false
           allow_issue_writing: false
 
-      # ── 9. Fallar solo si hay alertas High (riskcode=3) ──────────────────────
+      # ── 10. Fallar solo si hay alertas High (riskcode=3) ─────────────────────
       # Medium=2, Low=1, Informational=0 — quedan en el reporte pero no rompen el job.
       - name: Fail on High alerts
         if: always()
@@ -281,7 +290,7 @@ jobs:
           fi
           echo "Sin alertas High. Scan completado."
 
-      # ── 10. Subir reportes como artifact ────────────────────────────────────
+      # ── 11. Subir reportes como artifact ────────────────────────────────────
       # if: always() garantiza que los reportes se suban incluso si el step
       # anterior falló por alertas High.
       # Nombres por defecto generados por zaproxy/action-api-scan@v0.9.0.
