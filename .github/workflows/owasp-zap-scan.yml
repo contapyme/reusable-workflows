@@ -42,7 +42,7 @@ on:
 
       # ── Autenticación ───────────────────────────────────────────────────────
       auth_type:
-        description: 'Tipo de auth: none | static | dynamic'
+        description: 'Tipo de auth: none | static | dynamic | seed'
         type: string
         required: false
         default: 'dynamic'
@@ -156,11 +156,31 @@ jobs:
           exit 1
 
       # ── 5. Seed opcional ─────────────────────────────────────────────────────
-      # Si el caller provee seed_command, lo corre DESPUÉS de que la app arrancó
-      # (y por tanto después de que las migraciones ya corrieron).
+      # Si el caller provee seed_command, lo corre DESPUÉS de que la app arrancó.
+      # Con auth_type=seed: el comando debe imprimir una línea "TOKEN=<jwt>" en stdout;
+      # el workflow la captura y la usa como Bearer token para ZAP.
       - name: Run seed command (optional)
         if: inputs.seed_command != ''
-        run: ${{ inputs.seed_command }}
+        shell: bash
+        run: |
+          if [ "${{ inputs.auth_type }}" = "seed" ]; then
+            TMPFILE=$(mktemp)
+            ${{ inputs.seed_command }} | tee "$TMPFILE"; SEED_EXIT=${PIPESTATUS[0]}
+            if [ $SEED_EXIT -ne 0 ]; then
+              rm -f "$TMPFILE"
+              exit $SEED_EXIT
+            fi
+            TOKEN_LINE=$(grep "^TOKEN=" "$TMPFILE" | tail -1)
+            rm -f "$TMPFILE"
+            if [ -z "$TOKEN_LINE" ]; then
+              echo "ERROR: auth_type=seed pero el seed no emitió ninguna línea TOKEN=..."
+              exit 1
+            fi
+            echo "AUTH_TOKEN=${TOKEN_LINE#TOKEN=}" >> "$GITHUB_ENV"
+            echo "Token capturado del seed."
+          else
+            ${{ inputs.seed_command }}
+          fi
 
       # ── 6a. Auth estática ────────────────────────────────────────────────────
       # Copia directamente el secret API_TOKEN a la variable AUTH_TOKEN
