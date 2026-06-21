@@ -228,28 +228,31 @@ jobs:
           echo "AUTH_TOKEN=$TOKEN" >> $GITHUB_ENV
           echo "Token obtenido exitosamente."
 
-      # ── 7. OWASP ZAP Full Scan activo ───────────────────────────────────────
-      # full-scan = spider pasivo + escaneo activo (a diferencia de baseline-scan).
-      # El replacer plugin inyecta AUTH_TOKEN como header en TODAS las requests
-      # de ZAP, tanto del spider como del scan activo.
-      # fail_action: true → el job falla si encuentra alertas de severidad High.
+      # ── 7. Inyectar token de auth para ZAP ──────────────────────────────────
+      # ZAP_AUTH_HEADER / ZAP_AUTH_HEADER_VALUE son leídas por el Docker container
+      # (-e ZAP_AUTH_HEADER -e ZAP_AUTH_HEADER_VALUE ya están en el docker run).
+      # NO usar -config en cmd_options: getopt parsea -config como -c onfig
+      # → FileNotFoundError: /zap/wrk/onfig → ZAP crash inmediato sin reportes.
+      - name: Set ZAP auth header env vars
+        if: inputs.auth_type != 'none'
+        run: |
+          echo "ZAP_AUTH_HEADER=Authorization" >> "$GITHUB_ENV"
+          echo "ZAP_AUTH_HEADER_VALUE=Bearer ${AUTH_TOKEN}" >> "$GITHUB_ENV"
+
+      # ── 8. OWASP ZAP Full Scan activo ───────────────────────────────────────
+      # fail_action: true → el job falla si ZAP encuentra alertas High (esperado).
+      # Los archivos de reporte se controlan con -r/-w/-J en cmd_options porque
+      # report_html/report_md ya no son inputs válidos en v0.10.0.
       - name: OWASP ZAP Active Full Scan
         uses: zaproxy/action-full-scan@v0.10.0
         with:
           target: ${{ inputs.target != '' && inputs.target || format('http://localhost:{0}', inputs.port) }}
           fail_action: true
           allow_issue_writing: false
-          # report_html y report_md ya no son inputs válidos en v0.10.0 — se controlan via cmd_options
-          # -r/-w/-J en cmd_options sobreescriben los nombres por defecto de ZAP (report_html.html, etc.)
           cmd_options: >-
             -r zap-report.html
             -w zap-report.md
             -J zap-report.json
-            -config "replacer.full_list(0).description=zap-auth-header"
-            -config "replacer.full_list(0).enabled=true"
-            -config "replacer.full_list(0).matchtype=REQ_HEADER"
-            -config "replacer.full_list(0).matchstr=Authorization"
-            -config "replacer.full_list(0).replacement=Bearer ${{ env.AUTH_TOKEN }}"
 
       # ── 8. Subir reportes como artifact ─────────────────────────────────────
       # if: always() garantiza que los reportes se suban aunque el scan haya fallado
